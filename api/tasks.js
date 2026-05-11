@@ -42,12 +42,20 @@ function pageToTask(page) {
     const d = new Date(dueDateRaw);
     dueDate = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
-  return { id: page.id, name, status, tag, priority, dueDate };
+  return { id: page.id, name, status, tag, priority, dueDate, dueDateRaw };
+}
+
+function readBody(req) {
+  return new Promise(resolve => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => { try { resolve(JSON.parse(body)); } catch { resolve({}); } });
+  });
 }
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
@@ -60,22 +68,44 @@ module.exports = async (req, res) => {
       });
       const tasks = (data.results || []).map(pageToTask).filter(t => t.name);
       res.status(200).json(tasks);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
+    return;
+  }
+
+  if (req.method === 'POST') {
+    try {
+      const { name, tag, priority, status } = await readBody(req);
+      await notionRequest('POST', '/v1/pages', {
+        parent: { database_id: DATABASE_ID },
+        properties: {
+          'Task': { title: [{ text: { content: name } }] },
+          ...(tag      ? { 'Tag':      { select: { name: tag } } }      : {}),
+          ...(priority ? { 'Priority': { select: { name: priority } } } : {}),
+          ...(status   ? { 'Status':   { select: { name: status } } }   : {}),
+        }
+      });
+      res.status(200).json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
     return;
   }
 
   if (req.method === 'PATCH') {
     try {
-      const { id, status } = req.body;
+      const { id, status } = await readBody(req);
       await notionRequest('PATCH', `/v1/pages/${id}`, {
         properties: { 'Status': { select: { name: status } } }
       });
       res.status(200).json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    try {
+      const { id } = await readBody(req);
+      await notionRequest('PATCH', `/v1/pages/${id}`, { archived: true });
+      res.status(200).json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
     return;
   }
 
